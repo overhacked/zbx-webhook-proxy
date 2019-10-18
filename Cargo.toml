@@ -1,0 +1,17 @@
+[package]
+name = "infinias-to-zabbix"
+version = "0.1.0"
+authors = ["Ross Williams <ross@ross-williams.net>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.41"
+zbx_sender = "0.2.0"
+warp = "0.1.20"
+log = "0.4.8"
+pretty_env_logger = "0.3.1"
+structopt = { version = "0.3", default-features = false }
+dns-lookup = "1.0.1"
