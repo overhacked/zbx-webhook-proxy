@@ -92,6 +92,32 @@ fn setup_access_log(file: &Path) -> Result<fern::Dispatch, fern::InitError> {
     Ok(access_log)
 }
 
+fn log_warp_combined(info: warp::filters::log::Info) {
+    let status = info.status();
+    let level = if status.is_server_error() {
+        log::Level::Error
+    } else if status.is_client_error() {
+        log::Level::Warn
+    } else {
+        log::Level::Info
+    };
+    log!(
+        target: &format!("{}::http", module_path!()),
+        level,
+        "{} \"-\" \"-\" [{}] \"{} {} {:?}\" {} 0 \"{}\" \"{}\" {:?}",
+        info.remote_addr()
+            .map_or(String::from("-"), |a| format!("{}", a.ip())),
+        Utc::now().format("%d/%b/%Y:%H:%M:%S %z"),
+        info.method(),
+        info.path(),
+        info.version(),
+        status.as_u16(),
+        info.referer().unwrap_or("-"),
+        info.user_agent().unwrap_or("-"),
+        info.elapsed(),
+    );
+}
+
 fn main() -> Result<(), fern::InitError> {
     let args = Cli::from_args();
 
@@ -105,31 +131,7 @@ fn main() -> Result<(), fern::InitError> {
         args.access_log_path,
     )?;
 
-    let log = warp::log::custom(move |info| {
-        let status = info.status();
-        let level = if status.is_server_error() {
-            log::Level::Error
-        } else if status.is_client_error() {
-            log::Level::Warn
-        } else {
-            log::Level::Info
-        };
-        log!(
-            target: &format!("{}::http", module_path!()),
-            level,
-            "{} \"-\" \"-\" [{}] \"{} {} {:?}\" {} 0 \"{}\" \"{}\" {:?}",
-            info.remote_addr()
-                .map_or(String::from("-"), |a| format!("{}", a.ip())),
-            Utc::now().format("%d/%b/%Y:%H:%M:%S %z"),
-            info.method(),
-            info.path(),
-            info.version(),
-            status.as_u16(),
-            info.referer().unwrap_or("-"),
-            info.user_agent().unwrap_or("-"),
-            info.elapsed(),
-        );
-    });
+    let log = warp::log::custom(log_warp_combined);
 
     info!(
         "Zabbix Server at {}:{}",
