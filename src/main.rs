@@ -1,6 +1,6 @@
 use chrono::Utc;
 use dns_lookup::lookup_addr;
-use log::{debug, info, log, trace, LevelFilter};
+use log::{debug, info, log, LevelFilter};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
@@ -18,18 +18,28 @@ use std::io::{Error, ErrorKind};
 #[structopt(name = "serve")]
 struct Cli {
     #[structopt(long = "listen", short = "l", default_value = "[::1]:3030")]
+    /// HTTP server listening address and port
+    ///
+    /// Default: IPv6 localhost:3030
     listen: std::net::SocketAddr,
 
     #[structopt(long = "zabbix-server", short = "z")]
+    /// Zabbix Server address
     zabbix_server: String,
 
     #[structopt(long = "zabbix-port", short = "p", default_value = "10051")]
+    /// Zabbix Server trapper port
     zabbix_port: u16,
 
     #[structopt(long = "host", short = "s")]
+    /// Host name for Zabbix Item
+    ///
+    /// Host name the item belongs to (as registered in Zabbix frontend).
+    /// Host IP address and DNS name will not work.
     zabbix_item_host: Option<String>,
 
     #[structopt(long = "key", short = "k")]
+    /// Zabbix Item key
     zabbix_item_key: String,
 
     #[structopt(long = "access-log", short = "L", parse(from_os_str))]
@@ -43,13 +53,15 @@ struct Cli {
 
 fn setup_logging(
     console_level: log::LevelFilter,
-    access_log: Option<PathBuf>,
+    access_log: &Option<PathBuf>,
 ) -> Result<(), fern::InitError> {
     let mut loggers = fern::Dispatch::new();
 
     let mut console_log = setup_console_log(console_level);
 
     if let Some(file) = access_log {
+        // Suppress HTTP request logging to console when
+        // a file is configured
         console_log = console_log.level_for(format!("{}::http", module_path!()), LevelFilter::Off);
         let access_log = setup_access_log(&file)?;
         loggers = loggers.chain(access_log);
@@ -67,9 +79,12 @@ fn setup_console_log(level: log::LevelFilter) -> fern::Dispatch {
         _ => level,
     };
     fern::Dispatch::new()
+        // Don't let the console default level
+        // get more granular than Info, because
+        // some libraries are VERY verbose (tokio_*)
         .level(limit_to_info())
-        .level_for("tokio_reactor", limit_to_info())
-        .level_for("warp", limit_to_info())
+        // Allow this module and zbx_sender to
+        // log at Trace and Debug
         .level_for(module_path!(), level)
         .level_for("zbx_sender", level)
         .format(|out, message, record| {
@@ -86,14 +101,21 @@ fn setup_console_log(level: log::LevelFilter) -> fern::Dispatch {
 
 fn setup_access_log(file: &Path) -> Result<fern::Dispatch, fern::InitError> {
     let access_log = fern::Dispatch::new()
+        // Log the HTTP requests without modification,
+        // because warp handles the log line formatting
         .format(|out, message, _| out.finish(format_args!("{}", message,)))
+        // Don't log anything from modules that aren't
+        // specified with level_for()
         .level(LevelFilter::Off)
+        // HTTP requests must be logged with
+        // target = [THIS MODULE]::http
         .level_for(format!("{}::http", module_path!()), LevelFilter::Info)
         .chain(fern::log_file(file)?);
     Ok(access_log)
 }
 
 fn log_warp_combined(info: warp::filters::log::Info) {
+    // Increase log level for server and client errors
     let status = info.status();
     let level = if status.is_server_error() {
         log::Level::Error
@@ -105,6 +127,7 @@ fn log_warp_combined(info: warp::filters::log::Info) {
     log!(
         target: &format!("{}::http", module_path!()),
         level,
+        // Apache Combined Log Format: https://httpd.apache.org/docs/2.4/logs.html#combined
         "{} \"-\" \"-\" [{}] \"{} {} {:?}\" {} 0 \"{}\" \"{}\" {:?}",
         info.remote_addr()
             .map_or(String::from("-"), |a| format!("{}", a.ip())),
@@ -129,17 +152,19 @@ fn main() -> Result<(), fern::InitError> {
             2 => LevelFilter::Debug,
             _ => LevelFilter::Trace,
         },
-        args.access_log_path,
+        &args.access_log_path,
     )?;
 
-    let log = warp::log::custom(log_warp_combined);
+    if let Some(path) = &args.access_log_path {
+        info!("Logging HTTP requests to {}", path.display());
+    }
 
-    info!(
-        "Zabbix Server at {}:{}",
-        &args.zabbix_server, args.zabbix_port
-    );
+    // The Zabbix connector must live inside Arc
+    // because each warp request thread concurrently
+    // borrows it
     let zabbix: Arc<ZabbixLogger> =
         Arc::new(ZabbixLogger::new(&args.zabbix_server, args.zabbix_port));
+
     let iaevent = path("IAEvents")
         .and(warp::get2())
         .and(handle_iaevent(
@@ -147,7 +172,7 @@ fn main() -> Result<(), fern::InitError> {
             args.zabbix_item_host,
             args.zabbix_item_key,
         ))
-        .with(log);
+        .with(warp::log::custom(log_warp_combined));
 
     warp::serve(iaevent).run(args.listen);
     Ok(())
@@ -158,21 +183,30 @@ fn handle_iaevent(
     zabbix_host: Option<String>,
     zabbix_key: String,
 ) -> BoxedFilter<(impl Reply,)> {
+    // Get the remote socket address tuple
     warp::addr::remote()
         .and_then(|addr_option: Option<SocketAddr>| match addr_option {
+            // Fail with an error if the client address is not available
             Some(addr) => Ok(addr.ip()),
             None => Err(warp::reject::custom(Error::new(ErrorKind::AddrNotAvailable, "The client's remote address was not available"))),
         })
+        // Put GET params into a BTreeMap so they become sorted
         .and(warp::query::<BTreeMap<String, String>>())
         .map(move |remote: IpAddr, params| {
+            // Serialize params as JSON
             let j = json!(params);
+            // Use hostname if specified on the command line.
+            // Otherwise, try to lookup the client's hostname
+            // in DNS; fail gracefully to client IP as a string
             let host = match zabbix_host {
                 Some(ref s) => s.to_owned(),
                 None => lookup_addr(&remote).unwrap_or(format!("{}", &remote)),
             };
+            // Send to Zabbix
             zabbix.log(&host, &zabbix_key, &j.to_string())
         })
         .map(
+            // Handle any errors from Zabbix
             |zbx_result: zbx_sender::Result<zbx_sender::Response>| match zbx_result {
                 Ok(res) => {
                     match res.failed_cnt() {
@@ -199,13 +233,17 @@ struct ZabbixLogger {
 
 impl ZabbixLogger {
     fn new(server: &str, port: u16) -> ZabbixLogger {
+        info!(
+            "Logging to Zabbix Server at {}:{}",
+            server, port
+        );
         ZabbixLogger {
             sender: zbx_sender::Sender::new(server.to_owned(), port),
         }
     }
 
     fn log(&self, host: &str, key: &str, value: &str) -> zbx_sender::Result<zbx_sender::Response> {
-        trace!("sending value to Zabbix {{{}:{}}}: `{}`", host, key, value);
+        debug!("sending value to Zabbix {{{}:{}}}: `{}`", host, key, value);
         self.sender.send((host, key, value))
     }
 }
