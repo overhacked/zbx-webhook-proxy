@@ -11,7 +11,7 @@ use warp::http::StatusCode;
 use warp::{self, path, Filter, Reply};
 
 use fern;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "serve")]
@@ -46,16 +46,31 @@ fn setup_logging(
 ) -> Result<(), fern::InitError> {
     let mut loggers = fern::Dispatch::new();
 
-    let limit_to_info = || match console_level {
-        LevelFilter::Debug | LevelFilter::Trace => LevelFilter::Info,
-        _ => console_level,
+    let mut console_log = setup_console_log(console_level);
+
+    if let Some(file) = access_log {
+        console_log = console_log.level_for(format!("{}::http", module_path!()), LevelFilter::Off);
+        let access_log = setup_access_log(&file)?;
+        loggers = loggers.chain(access_log);
     };
-    let mut console_log = fern::Dispatch::new()
+
+    loggers = loggers.chain(console_log);
+
+    loggers.apply()?;
+    Ok(())
+}
+
+fn setup_console_log(level: log::LevelFilter) -> fern::Dispatch {
+    let limit_to_info = || match level {
+        LevelFilter::Debug | LevelFilter::Trace => LevelFilter::Info,
+        _ => level,
+    };
+    fern::Dispatch::new()
         .level(limit_to_info())
         .level_for("tokio_reactor", limit_to_info())
         .level_for("warp", limit_to_info())
-        .level_for(module_path!(), console_level)
-        .level_for("zbx_sender", console_level)
+        .level_for(module_path!(), level)
+        .level_for("zbx_sender", level)
         .format(|out, message, record| {
             out.finish(format_args!(
                 "{} [{}][{}] {}",
@@ -65,22 +80,16 @@ fn setup_logging(
                 message,
             ))
         })
-        .chain(std::io::stdout());
+        .chain(std::io::stdout())
+}
 
-    if let Some(file) = access_log {
-        console_log = console_log.level_for(format!("{}::http", module_path!()), LevelFilter::Off);
-        let access_log = fern::Dispatch::new()
-            .format(|out, message, _| out.finish(format_args!("{}", message,)))
-            .level(LevelFilter::Off)
-            .level_for(format!("{}::http", module_path!()), LevelFilter::Info)
-            .chain(fern::log_file(file)?);
-        loggers = loggers.chain(access_log);
-    };
-
-    loggers = loggers.chain(console_log);
-
-    loggers.apply()?;
-    Ok(())
+fn setup_access_log(file: &Path) -> Result<fern::Dispatch, fern::InitError> {
+    let access_log = fern::Dispatch::new()
+        .format(|out, message, _| out.finish(format_args!("{}", message,)))
+        .level(LevelFilter::Off)
+        .level_for(format!("{}::http", module_path!()), LevelFilter::Info)
+        .chain(fern::log_file(file)?);
+    Ok(access_log)
 }
 
 fn main() -> Result<(), fern::InitError> {
