@@ -11,7 +11,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.41"
 zbx_sender = "0.2.0"
 warp = "0.1.20"
-log = "0.4.8"
 pretty_env_logger = "0.3.1"
-structopt = { version = "0.3", default-features = false }
+structopt = { version = "0.3" }
 dns-lookup = "1.0.1"
+log = "0.4.8"
+fern = "0.5.8"
+chrono = "0.4.9"
