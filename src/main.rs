@@ -12,6 +12,7 @@ use warp::{self, path, Filter, Reply};
 
 use fern;
 use std::path::{Path, PathBuf};
+use std::io::{Error, ErrorKind};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "serve")]
@@ -160,7 +161,7 @@ fn handle_iaevent(
     warp::addr::remote()
         .and_then(|addr_option: Option<SocketAddr>| match addr_option {
             Some(addr) => Ok(addr.ip()),
-            None => Err(warp::reject::not_found()),
+            None => Err(warp::reject::custom(Error::new(ErrorKind::AddrNotAvailable, "The client's remote address was not available"))),
         })
         .and(warp::query::<BTreeMap<String, String>>())
         .map(move |remote: IpAddr, params| {
@@ -174,16 +175,16 @@ fn handle_iaevent(
         .map(
             |zbx_result: zbx_sender::Result<zbx_sender::Response>| match zbx_result {
                 Ok(res) => {
-                    let failures = res.failed_cnt().expect(
-                        "Zabbix returned a non-number where the failed count should have been",
-                    );
-                    if failures > 0 {
-                        warp::reply::with_status(
-                            format!("Zabbix failed to process {} items", failures),
+                    match res.failed_cnt() {
+                        None => warp::reply::with_status(
+                            String::from("Zabbix returned a non-number where the failed count should have been: {}"),
                             StatusCode::INTERNAL_SERVER_ERROR,
-                        )
-                    } else {
-                        warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT)
+                        ),
+                        Some(n) if n > 0 => warp::reply::with_status(
+                            format!("Zabbix failed to process {} items", n),
+                            StatusCode::BAD_REQUEST,
+                        ),
+                        _ => warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT),
                     }
                 }
                 Err(err) => warp::reply::with_status(err.to_string(), StatusCode::BAD_GATEWAY),
