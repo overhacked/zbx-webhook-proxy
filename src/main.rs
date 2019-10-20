@@ -7,9 +7,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use structopt::StructOpt;
-use warp::filters::BoxedFilter;
-use warp::http::StatusCode;
-use warp::{self, path, Filter, Reply};
+use warp::{
+    self, Filter, Reply,
+    http::StatusCode,
+};
 
 use fern;
 use std::path::{Path, PathBuf};
@@ -216,7 +217,7 @@ fn handle_get(
     zabbix: Arc<ZabbixLogger>,
     zabbix_host: Option<String>,
     zabbix_key: String,
-) -> BoxedFilter<(impl Reply,)> {
+) -> warp::filters::BoxedFilter<(impl Reply,)> {
     // Get the remote socket address tuple
     warp::addr::remote()
         .and_then(|addr_option: Option<SocketAddr>| match addr_option {
