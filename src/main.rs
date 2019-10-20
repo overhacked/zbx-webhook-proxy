@@ -4,6 +4,7 @@ use log::{debug, info, log, LevelFilter};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use structopt::StructOpt;
 use warp::filters::BoxedFilter;
@@ -22,6 +23,10 @@ struct Cli {
     ///
     /// Default: IPv6 localhost:3030
     listen: std::net::SocketAddr,
+
+    #[structopt(long = "path", short="P", default_value = "/", validator(validate_listen_path))]
+    /// Path on which to accept requests
+    listen_path: warp::http::uri::PathAndQuery,
 
     #[structopt(long = "zabbix-server", short = "z")]
     /// Zabbix Server address
@@ -49,6 +54,16 @@ struct Cli {
     #[structopt(short, parse(from_occurrences))]
     /// Specify up to 3 times to increase console logging
     verbosity: u8,
+}
+
+fn validate_listen_path(path_arg: String) -> Result<(), String> {
+    match warp::http::uri::PathAndQuery::from_str(&path_arg) {
+        Ok(path) => match path.query() {
+            Some(qs) => Err(format!("Listen path may not contain the query string `{}`", qs)),
+            None => Ok(()),
+        },
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn setup_logging(
@@ -165,20 +180,39 @@ fn main() -> Result<(), fern::InitError> {
     let zabbix: Arc<ZabbixLogger> =
         Arc::new(ZabbixLogger::new(&args.zabbix_server, args.zabbix_port));
 
-    let iaevent = path("IAEvents")
+    info!("Listening to requests on path `{}`", &args.listen_path);
+    let listen_path = args.listen_path.as_str().trim_start_matches("/").to_owned();
+    let path_filter = if listen_path != "" {
+        warp::path::param()
+        .and(warp::path::end())
+        .and_then(move |request_path: String| {
+            if request_path == listen_path {
+                Ok(())
+            } else {
+                Err(warp::reject::not_found())
+            }
+        })
+        // Following consumes 0-tuple result from above
+        // and untuple_one() removes it from the chain
+        .map(|_| {}).untuple_one()
+        .boxed()
+    } else {
+        warp::path::end().boxed()
+    };
+    let routes = path_filter
         .and(warp::get2())
-        .and(handle_iaevent(
+        .and(handle_get(
             Arc::clone(&zabbix),
             args.zabbix_item_host,
             args.zabbix_item_key,
         ))
         .with(warp::log::custom(log_warp_combined));
 
-    warp::serve(iaevent).run(args.listen);
+    warp::serve(routes).run(args.listen);
     Ok(())
 }
 
-fn handle_iaevent(
+fn handle_get(
     zabbix: Arc<ZabbixLogger>,
     zabbix_host: Option<String>,
     zabbix_key: String,
