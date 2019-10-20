@@ -17,34 +17,31 @@ use std::path::{Path, PathBuf};
 use std::io::{Error, ErrorKind};
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "serve")]
+#[structopt(about, author)]
 struct Cli {
     #[structopt(long = "listen", short = "l", default_value = "[::1]:3030")]
     /// HTTP server listening address and port
-    ///
-    /// Default: IPv6 localhost:3030
     listen: std::net::SocketAddr,
 
     #[structopt(long = "path", short="P", default_value = "/", validator(validate_listen_path))]
     /// Path on which to accept requests
     listen_path: warp::http::uri::PathAndQuery,
 
-    #[structopt(long = "zabbix-server", short = "z")]
+    #[structopt(long = "zabbix-server", short = "z", display_order(1))]
     /// Zabbix Server address
     zabbix_server: String,
 
-    #[structopt(long = "zabbix-port", short = "p", default_value = "10051")]
+    #[structopt(long = "zabbix-port", short = "p", default_value = "10051", display_order(2))]
     /// Zabbix Server trapper port
     zabbix_port: u16,
 
-    #[structopt(long = "host", short = "s")]
-    /// Host name for Zabbix Item
+    #[structopt(long = "host", short = "s", display_order(4))]
+    /// Host name for Zabbix Item (OPTIONAL) [default: reverse DNS or IP address of HTTP client]
     ///
     /// Host name the item belongs to (as registered in Zabbix frontend).
-    /// Host IP address and DNS name will not work.
     zabbix_item_host: Option<String>,
 
-    #[structopt(long = "key", short = "k")]
+    #[structopt(long = "key", short = "k", display_order(3))]
     /// Zabbix Item key
     zabbix_item_key: String,
 
