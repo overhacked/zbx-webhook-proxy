@@ -1,4 +1,5 @@
 use chrono::Utc;
+use clap::Parser;
 use dns_lookup::lookup_addr;
 use log::{debug, info, log, LevelFilter};
 use serde_json::json;
@@ -6,7 +7,6 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use structopt::StructOpt;
 use warp::{
     self, Filter, Reply,
     http::StatusCode,
@@ -15,45 +15,45 @@ use warp::{
 use std::path::{Path, PathBuf};
 use std::io::{Error, ErrorKind};
 
-#[derive(StructOpt, Debug)]
-#[structopt(about, author)]
+#[derive(Parser, Debug)]
+#[clap(about, author)]
 struct Cli {
-    #[structopt(long = "listen", short = "l", default_value = "[::1]:3030")]
+    #[clap(long = "listen", short = 'l', default_value = "[::1]:3030")]
     /// HTTP server listening address and port
     listen: std::net::SocketAddr,
 
-    #[structopt(long = "path", short="P", default_value = "/", validator(validate_listen_path))]
+    #[clap(long = "path", short = 'P', default_value = "/", validator(validate_listen_path))]
     /// Path on which to accept requests
     listen_path: warp::http::uri::PathAndQuery,
 
-    #[structopt(long = "zabbix-server", short = "z", display_order(1))]
+    #[clap(long = "zabbix-server", short = 'z', display_order(1))]
     /// Zabbix Server address
     zabbix_server: String,
 
-    #[structopt(long = "zabbix-port", short = "p", default_value = "10051", display_order(2))]
+    #[clap(long = "zabbix-port", short = 'p', default_value = "10051", display_order(2))]
     /// Zabbix Server trapper port
     zabbix_port: u16,
 
-    #[structopt(long = "host", short = "s", display_order(4))]
+    #[clap(long = "host", short = 's', display_order(4))]
     /// Host name for Zabbix Item (OPTIONAL) [default: reverse DNS or IP address of HTTP client]
     ///
     /// Host name the item belongs to (as registered in Zabbix frontend).
     zabbix_item_host: Option<String>,
 
-    #[structopt(long = "key", short = "k", display_order(3))]
+    #[clap(long = "key", short = 'k', display_order(3))]
     /// Zabbix Item key
     zabbix_item_key: String,
 
-    #[structopt(long = "access-log", short = "L", parse(from_os_str))]
+    #[clap(long = "access-log", short = 'L', parse(from_os_str))]
     /// Log to a file in Apache Combined logging format
     access_log_path: Option<PathBuf>,
 
-    #[structopt(short, parse(from_occurrences))]
+    #[clap(short, parse(from_occurrences))]
     /// Specify up to 3 times to increase console logging
     verbosity: u8,
 }
 
-fn validate_listen_path(path_arg: String) -> Result<(), String> {
+fn validate_listen_path(path_arg: &str) -> Result<(), String> {
     match warp::http::uri::PathAndQuery::from_str(&path_arg) {
         Ok(path) => match path.query() {
             Some(qs) => Err(format!("Listen path may not contain the query string `{}`", qs)),
@@ -155,7 +155,7 @@ fn log_warp_combined(info: warp::filters::log::Info) {
 }
 
 fn main() -> Result<(), fern::InitError> {
-    let args = Cli::from_args();
+    let args = Cli::parse();
 
     setup_logging(
         match args.verbosity {
