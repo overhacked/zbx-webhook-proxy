@@ -54,7 +54,7 @@ struct Cli {
 }
 
 fn validate_listen_path(path_arg: &str) -> Result<(), String> {
-    match warp::http::uri::PathAndQuery::from_str(&path_arg) {
+    match warp::http::uri::PathAndQuery::from_str(path_arg) {
         Ok(path) => match path.query() {
             Some(qs) => Err(format!("Listen path may not contain the query string `{}`", qs)),
             None => Ok(()),
@@ -75,7 +75,7 @@ fn setup_logging(
         // Suppress HTTP request logging to console when
         // a file is configured
         console_log = console_log.level_for(format!("{}::http", module_path!()), LevelFilter::Off);
-        let access_log = setup_access_log(&file)?;
+        let access_log = setup_access_log(file)?;
         loggers = loggers.chain(access_log);
     };
 
@@ -178,8 +178,8 @@ fn main() -> Result<(), fern::InitError> {
         Arc::new(ZabbixLogger::new(&args.zabbix_server, args.zabbix_port));
 
     info!("Listening to requests on path `{}`", &args.listen_path);
-    let listen_path = args.listen_path.as_str().trim_start_matches("/").to_owned();
-    let path_filter = if listen_path != "" {
+    let listen_path = args.listen_path.as_str().trim_start_matches('/').to_owned();
+    let path_filter = if !listen_path.is_empty() {
         warp::path::param()
         .and(warp::path::end())
         .and_then(move |request_path: String| {
