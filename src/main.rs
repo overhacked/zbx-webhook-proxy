@@ -1,9 +1,11 @@
 use chrono::Utc;
 use clap::Parser;
 use dns_lookup::lookup_addr;
-use log::{debug, info, log, LevelFilter};
-use serde_json::json;
+use log::{debug, info, log, LevelFilter, warn};
+use serde_json::{json, Value as JsonValue};
+use warp::Rejection;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -11,9 +13,9 @@ use warp::{
     self, Filter, Reply,
     http::StatusCode,
 };
+use thiserror::Error;
 
 use std::path::{Path, PathBuf};
-use std::io::{Error, ErrorKind};
 
 #[derive(Parser, Debug)]
 #[clap(about, author)]
@@ -154,7 +156,8 @@ fn log_warp_combined(info: warp::filters::log::Info) {
     );
 }
 
-fn main() -> Result<(), fern::InitError> {
+#[tokio::main]
+async fn main() -> Result<(), fern::InitError> {
     let args = Cli::parse();
 
     setup_logging(
@@ -183,10 +186,13 @@ fn main() -> Result<(), fern::InitError> {
         warp::path::param()
         .and(warp::path::end())
         .and_then(move |request_path: String| {
-            if request_path == listen_path {
-                Ok(())
-            } else {
-                Err(warp::reject::not_found())
+            let listen_path = listen_path.clone();
+            async move {
+                if request_path == listen_path {
+                    Ok(())
+                } else {
+                    Err(warp::reject::not_found())
+                }
             }
         })
         // Following consumes 0-tuple result from above
@@ -196,66 +202,81 @@ fn main() -> Result<(), fern::InitError> {
     } else {
         warp::path::end().boxed()
     };
+    let context = AppContext {
+        zabbix: Arc::clone(&zabbix),
+        zabbix_host: args.zabbix_item_host,
+        zabbix_key: args.zabbix_item_key,
+    };
+
     let routes = path_filter
-        .and(warp::get2())
-        .and(handle_get(
-            Arc::clone(&zabbix),
-            args.zabbix_item_host,
-            args.zabbix_item_key,
-        ))
+        .and(with_context(context))
+        .and(remote_addr())
+        .and(get().or(post()).unify())
+        .and_then(handle_request_params)
         .with(warp::log::custom(log_warp_combined));
 
-    warp::serve(routes).run(args.listen);
+    warp::serve(routes).run(args.listen).await;
     Ok(())
 }
 
-fn handle_get(
+fn with_context(ctx: AppContext) -> impl Filter<Extract = (AppContext,), Error = Infallible> + Clone {
+    warp::any().map(move || ctx.clone())
+}
+
+fn remote_addr() -> impl Filter<Extract = (IpAddr,), Error = Rejection> + Clone {
+    // Get the remote socket address tuple
+    warp::addr::remote()
+        .and_then(|addr_option: Option<SocketAddr>| async move { match addr_option {
+            // Fail with an error if the client address is not available
+            Some(addr) => Ok(addr.ip()),
+            None => Err(warp::reject::custom(RequestError::MissingClientAddr)),
+        }})
+}
+
+fn get() -> impl Filter<Extract = (JsonValue, ), Error = Rejection> + Clone {
+    warp::get()
+        // Put GET params into a BTreeMap so they become sorted
+        .and(warp::query::<BTreeMap<String, String>>())
+        .map(|params| json!(params))
+}
+
+fn post() -> impl Filter<Extract = (JsonValue, ), Error = Rejection> + Clone {
+    warp::post()
+        .and(warp::body::json::<JsonValue>())
+}
+
+async fn handle_request_params(
+    ctx: AppContext,
+    remote_addr: IpAddr,
+    json: JsonValue,
+) -> Result<impl Reply, Rejection> {
+    // Use hostname if specified on the command line.
+    // Otherwise, try to lookup the client's hostname
+    // in DNS; fail gracefully to client IP as a string
+    let host = match ctx.zabbix_host {
+        Some(ref s) => s.to_owned(),
+        None => lookup_addr(&remote_addr).unwrap_or(format!("{}", &remote_addr)),
+    };
+
+    // Send to Zabbix
+    let zbx_result = ctx.zabbix.log(&host, &ctx.zabbix_key, &json.to_string());
+    match zbx_result {
+        Ok(res) => {
+            match res.failed_cnt() {
+                None => Err(warp::reject::custom(RequestError::ZabbixBadReply)), // StatusCode::INTERNAL_SERVER_ERROR
+                Some(n) if n > 0 => Err(warp::reject::custom(RequestError::ZabbixItemsFailed(n))), // StatusCode::BAD_REQUEST
+                _ => Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT)),
+            }
+        }
+        Err(err) => Err(warp::reject::custom(RequestError::ZabbixError(err.to_string()))), // StatusCode::BAD_GATEWAY
+    }
+}
+
+#[derive(Clone)]
+struct AppContext {
     zabbix: Arc<ZabbixLogger>,
     zabbix_host: Option<String>,
     zabbix_key: String,
-) -> warp::filters::BoxedFilter<(impl Reply,)> {
-    // Get the remote socket address tuple
-    warp::addr::remote()
-        .and_then(|addr_option: Option<SocketAddr>| match addr_option {
-            // Fail with an error if the client address is not available
-            Some(addr) => Ok(addr.ip()),
-            None => Err(warp::reject::custom(Error::new(ErrorKind::AddrNotAvailable, "The client's remote address was not available"))),
-        })
-        // Put GET params into a BTreeMap so they become sorted
-        .and(warp::query::<BTreeMap<String, String>>())
-        .map(move |remote: IpAddr, params| {
-            // Serialize params as JSON
-            let j = json!(params);
-            // Use hostname if specified on the command line.
-            // Otherwise, try to lookup the client's hostname
-            // in DNS; fail gracefully to client IP as a string
-            let host = match zabbix_host {
-                Some(ref s) => s.to_owned(),
-                None => lookup_addr(&remote).unwrap_or(format!("{}", &remote)),
-            };
-            // Send to Zabbix
-            zabbix.log(&host, &zabbix_key, &j.to_string())
-        })
-        .map(
-            // Handle any errors from Zabbix
-            |zbx_result: zbx_sender::Result<zbx_sender::Response>| match zbx_result {
-                Ok(res) => {
-                    match res.failed_cnt() {
-                        None => warp::reply::with_status(
-                            String::from("Zabbix returned a non-number where the failed count should have been: {}"),
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                        ),
-                        Some(n) if n > 0 => warp::reply::with_status(
-                            format!("Zabbix failed to process {} items", n),
-                            StatusCode::BAD_REQUEST,
-                        ),
-                        _ => warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT),
-                    }
-                }
-                Err(err) => warp::reply::with_status(err.to_string(), StatusCode::BAD_GATEWAY),
-            },
-        )
-        .boxed()
 }
 
 struct ZabbixLogger {
@@ -263,13 +284,15 @@ struct ZabbixLogger {
 }
 
 impl ZabbixLogger {
-    fn new(server: &str, port: u16) -> ZabbixLogger {
+    fn new(server: impl Into<String>, port: u16) -> Self {
+        let server = server.into();
+
         info!(
             "Logging to Zabbix Server at {}:{}",
             server, port
         );
-        ZabbixLogger {
-            sender: zbx_sender::Sender::new(server.to_owned(), port),
+        Self {
+            sender: zbx_sender::Sender::new(server, port),
         }
     }
 
@@ -278,3 +301,17 @@ impl ZabbixLogger {
         self.sender.send((host, key, value))
     }
 }
+
+#[derive(Error, Debug)]
+enum RequestError {
+    #[error("the client's remote address was not available")]
+    MissingClientAddr,
+    #[error("Zabbix returned a non-number where the failed count should have been")]
+    ZabbixBadReply,
+    #[error("Zabbix failed {0} items in the request")]
+    ZabbixItemsFailed(i32),
+    #[error("{0}")]
+    ZabbixError(String),
+}
+
+impl warp::reject::Reject for RequestError {}
