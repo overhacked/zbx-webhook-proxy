@@ -53,6 +53,10 @@ struct Cli {
     #[clap(short, parse(from_occurrences))]
     /// Specify up to 3 times to increase console logging
     verbosity: u8,
+
+    #[clap(long)]
+    /// Run in test mode without sending actual values to Zabbix server
+    test_mode: bool,
 }
 
 fn validate_listen_path(path_arg: &str) -> Result<(), String> {
@@ -203,6 +207,7 @@ async fn main() -> Result<(), fern::InitError> {
         warp::path::end().boxed()
     };
     let context = AppContext {
+        in_test: args.test_mode,
         zabbix: Arc::clone(&zabbix),
         zabbix_host: args.zabbix_item_host,
         zabbix_key: args.zabbix_item_key,
@@ -259,6 +264,11 @@ async fn handle_request_params(
     };
 
     // Send to Zabbix
+    if ctx.in_test {
+        warn!("would send value to Zabbix {{{}:{}}}: `{}`", &host, &ctx.zabbix_key, &json.to_string());
+        return Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT));
+    }
+
     let zbx_result = ctx.zabbix.log(&host, &ctx.zabbix_key, &json.to_string());
     match zbx_result {
         Ok(res) => {
@@ -274,6 +284,7 @@ async fn handle_request_params(
 
 #[derive(Clone)]
 struct AppContext {
+    in_test: bool,
     zabbix: Arc<ZabbixLogger>,
     zabbix_host: Option<String>,
     zabbix_key: String,
