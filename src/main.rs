@@ -218,6 +218,7 @@ async fn main() -> Result<(), fern::InitError> {
         .and(remote_addr())
         .and(get().or(post()).unify())
         .and_then(handle_request_params)
+        .recover(handle_request_error)
         .with(warp::log::custom(log_warp_combined));
 
     warp::serve(routes).run(args.listen).await;
@@ -280,6 +281,34 @@ async fn handle_request_params(
         }
         Err(err) => Err(warp::reject::custom(RequestError::ZabbixError(err.to_string()))), // StatusCode::BAD_GATEWAY
     }
+}
+
+async fn handle_request_error(err: Rejection) -> Result<impl Reply, Infallible> {
+    let code;
+    let message;
+
+    if err.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        message = "NOT_FOUND";
+    } else if let Some(e) = err.find::<RequestError>() {
+        use RequestError::*;
+        (code, message) = match e {
+            MissingClientAddr => (StatusCode::BAD_REQUEST, "MISSING_CLIENT_ADDR",),
+            ZabbixBadReply => (StatusCode::INTERNAL_SERVER_ERROR, "ZABBIX_REPLY_INVALID",),
+            ZabbixItemsFailed(_) => (StatusCode::BAD_REQUEST, "ZABBIX_ITEMS_FAILED",),
+            ZabbixError(_) => (StatusCode::BAD_GATEWAY, "ZABBIX_ERROR",),
+        };
+    } else {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "UNHANDLED_ERROR";
+    }
+
+    let json = warp::reply::json(&json!({
+        "code": code.as_u16(),
+        "message": message,
+    }));
+
+    Ok(warp::reply::with_status(json, code))
 }
 
 #[derive(Clone)]
