@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use std::path::{Path, PathBuf};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[clap(about, author)]
 struct Cli {
     #[clap(long = "listen", short = 'l', default_value = "[::1]:3030")]
@@ -41,6 +41,16 @@ struct Cli {
     ///
     /// Host name the item belongs to (as registered in Zabbix frontend).
     zabbix_item_host: Option<String>,
+
+    #[clap(long = "dynamic-host", short = 'S', display_order(5), parse(try_from_str = jmespath::compile))]
+    /// Dynamic field from request to determine host name for Zabbix Item
+    /// [default: specified --host or HTTP client address]
+    zabbix_item_host_field: Option<jmespath::Expression<'static>>,
+
+    #[clap(long = "dynamic-host-required", display_order(6), requires = "zabbix-item-host-field")]
+    /// The field specified by --dynamic-host must be present in the request parameters, or
+    /// a warning will be logged and the request dropped.
+    host_field_required: bool,
 
     #[clap(long = "key", short = 'k', display_order(3))]
     /// Zabbix Item key
@@ -206,11 +216,11 @@ async fn main() -> Result<(), fern::InitError> {
     } else {
         warp::path::end().boxed()
     };
+
+    let listen = args.listen;
     let context = AppContext {
-        in_test: args.test_mode,
         zabbix: Arc::clone(&zabbix),
-        zabbix_host: args.zabbix_item_host,
-        zabbix_key: args.zabbix_item_key,
+        args,
     };
 
     let routes = path_filter
@@ -221,7 +231,7 @@ async fn main() -> Result<(), fern::InitError> {
         .recover(handle_request_error)
         .with(warp::log::custom(log_warp_combined));
 
-    warp::serve(routes).run(args.listen).await;
+    warp::serve(routes).run(listen).await;
     Ok(())
 }
 
@@ -259,18 +269,31 @@ async fn handle_request_params(
     // Use hostname if specified on the command line.
     // Otherwise, try to lookup the client's hostname
     // in DNS; fail gracefully to client IP as a string
-    let host = match ctx.zabbix_host {
+    let static_host = match ctx.args.zabbix_item_host {
         Some(ref s) => s.to_owned(),
         None => lookup_addr(&remote_addr).unwrap_or(format!("{}", &remote_addr)),
     };
 
+    let host = match ctx.args.zabbix_item_host_field {
+        None => static_host,
+        Some(pat) => {
+            let field = pat.search(&json).unwrap_or_else(|_| todo!());
+            // Ensure result of JMESPath query is a string
+            if field.is_null() {
+                static_host
+            } else {
+                field.as_string().unwrap_or_else(|| todo!()).to_owned()
+            }
+        }
+    };
+
     // Send to Zabbix
-    if ctx.in_test {
-        warn!("would send value to Zabbix {{{}:{}}}: `{}`", &host, &ctx.zabbix_key, &json.to_string());
+    if ctx.args.test_mode {
+        warn!("would send value to Zabbix {{{}:{}}}: `{}`", &host, &ctx.args.zabbix_item_key, &json.to_string());
         return Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT));
     }
 
-    let zbx_result = ctx.zabbix.log(&host, &ctx.zabbix_key, &json.to_string());
+    let zbx_result = ctx.zabbix.log(&host, &ctx.args.zabbix_item_key, &json.to_string());
     match zbx_result {
         Ok(res) => {
             match res.failed_cnt() {
@@ -313,10 +336,8 @@ async fn handle_request_error(err: Rejection) -> Result<impl Reply, Infallible> 
 
 #[derive(Clone)]
 struct AppContext {
-    in_test: bool,
     zabbix: Arc<ZabbixLogger>,
-    zabbix_host: Option<String>,
-    zabbix_key: String,
+    args: Cli,
 }
 
 struct ZabbixLogger {
