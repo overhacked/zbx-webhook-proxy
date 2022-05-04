@@ -7,7 +7,7 @@ use serde_json::{json, Value as JsonValue};
 use warp::Rejection;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use warp::{
@@ -135,10 +135,10 @@ async fn main() -> Result<(), fern::InitError> {
 
     let routes = path_filter
         .and(with_context(context))
-        .and(remote_addr())
+        .and(warp::addr::remote())
         .and(get().or(post()).unify())
-        .and_then(handle_request_params)
-        .recover(handle_request_error)
+        .and_then(handle_request)
+        .recover(handle_errors)
         .with(warp::log::custom(logging::warp_combined));
 
     warp::serve(routes).run(listen).await;
@@ -147,16 +147,6 @@ async fn main() -> Result<(), fern::InitError> {
 
 fn with_context(ctx: AppContext) -> impl Filter<Extract = (AppContext,), Error = Infallible> + Clone {
     warp::any().map(move || ctx.clone())
-}
-
-fn remote_addr() -> impl Filter<Extract = (IpAddr,), Error = Rejection> + Clone {
-    // Get the remote socket address tuple
-    warp::addr::remote()
-        .and_then(|addr_option: Option<SocketAddr>| async move { match addr_option {
-            // Fail with an error if the client address is not available
-            Some(addr) => Ok(addr.ip()),
-            None => Err(warp::reject::custom(RequestError::MissingClientAddr)),
-        }})
 }
 
 fn get() -> impl Filter<Extract = (JsonValue, ), Error = Rejection> + Clone {
@@ -171,52 +161,93 @@ fn post() -> impl Filter<Extract = (JsonValue, ), Error = Rejection> + Clone {
         .and(warp::body::json::<JsonValue>())
 }
 
-async fn handle_request_params(
+async fn handle_request(
     ctx: AppContext,
-    remote_addr: IpAddr,
+    addr_option: Option<SocketAddr>,
     json: JsonValue,
 ) -> Result<impl Reply, Rejection> {
-    // Use hostname if specified on the command line.
-    // Otherwise, try to lookup the client's hostname
-    // in DNS; fail gracefully to client IP as a string
-    let static_host = match ctx.args.zabbix_item_host {
-        Some(ref s) => s.to_owned(),
-        None => lookup_addr(&remote_addr).unwrap_or(format!("{}", &remote_addr)),
-    };
+    let remote_host = resolve_item_host(&ctx, &addr_option, &json).await?;
+    send_to_zabbix(&ctx, &remote_host, &json.to_string()).await
 
-    let host = match ctx.args.zabbix_item_host_field {
-        None => static_host,
-        Some(pat) => {
-            let field = pat.search(&json).unwrap_or_else(|_| todo!());
-            // Ensure result of JMESPath query is a string
-            if field.is_null() {
-                static_host
-            } else {
-                field.as_string().unwrap_or_else(|| todo!()).to_owned()
-            }
+}
+
+async fn resolve_item_host(
+    ctx: &AppContext,
+    addr_option: &Option<SocketAddr>,
+    json: &JsonValue,
+) -> Result<String, Rejection> {
+    // Is --zabbix-item-host-field specified?
+    if let Some(pat) = &ctx.args.zabbix_item_host_field {
+        if let Some(h) = resolve_dynamic_host(pat, json).await? {
+            // Can the requested field be found in the GET params or POST body?
+            return Ok(h);
+        } else if ctx.args.host_field_required {
+            // Otherwise, abort with an error if --host-field-required is set
+            return Err(RequestError::MissingHostField.into());
+        } else {
+            // If --host-field-required not set, then continue below
         }
-    };
-
-    // Send to Zabbix
-    if ctx.args.test_mode {
-        warn!("would send value to Zabbix {{{}:{}}}: `{}`", &host, &ctx.args.zabbix_item_key, &json.to_string());
-        return Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT));
     }
 
-    let zbx_result = ctx.zabbix.log(&host, &ctx.args.zabbix_item_key, &json.to_string());
-    match zbx_result {
-        Ok(res) => {
-            match res.failed_cnt() {
-                None => Err(warp::reject::custom(RequestError::ZabbixBadReply)), // StatusCode::INTERNAL_SERVER_ERROR
-                Some(n) if n > 0 => Err(warp::reject::custom(RequestError::ZabbixItemsFailed(n))), // StatusCode::BAD_REQUEST
-                _ => Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT)),
-            }
-        }
-        Err(err) => Err(warp::reject::custom(RequestError::ZabbixError(err.to_string()))), // StatusCode::BAD_GATEWAY
+    if let Some(host) = &ctx.args.zabbix_item_host {
+        // Is a static --zabbix-item-host set?
+        Ok(host.to_owned())
+    } else if let Some(addr) = addr_option {
+        // Otherwise, try to resolve the client's address to
+        // a DNS name and fall back to just using the IP
+        Ok(resolve_remote_host(addr).await)
+    } else {
+        // Unlikely, but if all ways of determining the item
+        // host are unavailable, abort with an error
+        Err(RequestError::MissingClientAddr.into())
     }
 }
 
-async fn handle_request_error(err: Rejection) -> Result<impl Reply, Infallible> {
+async fn resolve_dynamic_host(
+    pattern: &jmespath::Expression<'_>,
+    json: &JsonValue,
+) -> Result<Option<String>, RequestError> {
+    let field = pattern.search(json)?;
+
+    // Ensure result of JMESPath query is a string
+    let field = field.as_string().map(|s| s.to_owned());
+    Ok(field)
+}
+
+async fn resolve_remote_host(
+    remote_addr: &SocketAddr,
+) -> String {
+    let remote_addr = remote_addr.ip();
+
+    // Try to look up the PTR record for this IP.
+    // Failing that, return the IP address as a string.
+    lookup_addr(&remote_addr).unwrap_or(format!("{}", &remote_addr))
+}
+
+async fn send_to_zabbix(ctx: &AppContext, host: &str, data: &str) -> Result<impl Reply, Rejection> {
+    let success_reply = warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT);
+
+    // If running in test mode, log what would be sent to zabbix to the console,
+    // and return as if successful.
+    if ctx.args.test_mode {
+        warn!("would send value to Zabbix {{{}:{}}}: `{}`", host, &ctx.args.zabbix_item_key, data);
+        return Ok(success_reply);
+    }
+
+    let zbx_result = ctx.zabbix.log(host, &ctx.args.zabbix_item_key, data);
+    match zbx_result {
+        Ok(res) => {
+            match res.failed_cnt() {
+                None => Err(RequestError::ZabbixBadReply.into()),
+                Some(n) if n > 0 => Err(RequestError::ZabbixItemsFailed(n).into()),
+                _ => Ok(success_reply),
+            }
+        }
+        Err(err) => Err(RequestError::ZabbixError(err.to_string()).into()),
+    }
+}
+
+async fn handle_errors(err: Rejection) -> Result<impl Reply, Infallible> {
     let code;
     let message;
 
@@ -227,6 +258,8 @@ async fn handle_request_error(err: Rejection) -> Result<impl Reply, Infallible> 
         use RequestError::*;
         (code, message) = match e {
             MissingClientAddr => (StatusCode::BAD_REQUEST, "MISSING_CLIENT_ADDR",),
+            JmespathError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "JMESPATH_ERROR",),
+            MissingHostField => (StatusCode::BAD_REQUEST, "MISSING_HOST_FIELD",),
             ZabbixBadReply => (StatusCode::INTERNAL_SERVER_ERROR, "ZABBIX_REPLY_INVALID",),
             ZabbixItemsFailed(_) => (StatusCode::BAD_REQUEST, "ZABBIX_ITEMS_FAILED",),
             ZabbixError(_) => (StatusCode::BAD_GATEWAY, "ZABBIX_ERROR",),
@@ -277,6 +310,10 @@ impl ZabbixLogger {
 enum RequestError {
     #[error("the client's remote address was not available")]
     MissingClientAddr,
+    #[error(transparent)]
+    JmespathError(#[from] jmespath::JmespathError),
+    #[error("the request parameters do not contain the host field")]
+    MissingHostField,
     #[error("Zabbix returned a non-number where the failed count should have been")]
     ZabbixBadReply,
     #[error("Zabbix failed {0} items in the request")]
