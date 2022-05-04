@@ -1,7 +1,7 @@
 mod logging;
 
 use clap::Parser;
-use log::{debug, info, LevelFilter, warn};
+use log::{debug, info, LevelFilter, warn, error};
 use serde_json::{json, Value as JsonValue};
 use warp::Rejection;
 use std::collections::BTreeMap;
@@ -44,18 +44,27 @@ struct Cli {
     zabbix_item_host: Option<String>,
 
     #[clap(long = "dynamic-host", short = 'S', display_order(5), parse(try_from_str = jmespath::compile))]
-    /// Dynamic field from request to determine host name for Zabbix Item
+    /// Dynamic field from request to determine host name for Zabbix Item.
+    /// Can be a simple top-level field name or a JMESpath filter. In POSTed
+    /// JSON data, the result must be a JSON string.
     /// [default: specified --host or HTTP client address]
     zabbix_item_host_field: Option<jmespath::Expression<'static>>,
 
     #[clap(long = "dynamic-host-required", display_order(6), requires = "zabbix-item-host-field")]
-    /// The field specified by --dynamic-host must be present in the request parameters, or
+    /// The field specified by --dynamic-host must be present in the request, or
     /// a warning will be logged and the request dropped.
     host_field_required: bool,
 
     #[clap(long = "key", short = 'k', display_order(3))]
     /// Zabbix Item key
     zabbix_item_key: String,
+
+    #[clap(long = "filter", short = 'F', parse(try_from_str = jmespath::compile))]
+    /// JMESpath filter to be applied to data before forwarding to Zabbix.
+    /// GET parameters are transformed from key=value... to {"key": "value",...}
+    /// and can be filtered as normal JSON.
+    /// POSTed JSON data can be filtered directly.
+    json_filter: Option<jmespath::Expression<'static>>,
 
     #[clap(long = "access-log", short = 'L', parse(from_os_str))]
     /// Log to a file in Apache Combined logging format
@@ -168,8 +177,20 @@ async fn handle_request(
     json: JsonValue,
 ) -> Result<impl Reply, Rejection> {
     let remote_host = resolve_item_host(&ctx, &addr_option, &json).await?;
-    send_to_zabbix(&ctx, &remote_host, &json.to_string()).await
 
+    let payload = match &ctx.args.json_filter {
+        Some(f) => {
+            let jmespath_result = f.search(json).map_err(RequestError::from)?;
+            if jmespath_result.is_null() {
+                error!("the configured filter [{}] doesn't match any data in the request", f);
+                return Err(RequestError::NoFilterMatch.into());
+            }
+            jmespath_result.to_string()
+        },
+        None => json.to_string(),
+    };
+
+    send_to_zabbix(&ctx, &remote_host, payload).await
 }
 
 async fn resolve_item_host(
@@ -246,7 +267,8 @@ async fn resolve_dynamic_host(
     Ok(field)
 }
 
-async fn send_to_zabbix(ctx: &AppContext, host: &str, data: &str) -> Result<impl Reply, Rejection> {
+async fn send_to_zabbix(ctx: &AppContext, host: &str, data: impl AsRef<str>) -> Result<impl Reply, Rejection> {
+    let data = data.as_ref();
     let success_reply = warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT);
 
     // If running in test mode, log what would be sent to zabbix to the console,
@@ -282,6 +304,7 @@ async fn handle_errors(err: Rejection) -> Result<impl Reply, Infallible> {
             MissingClientAddr => (StatusCode::BAD_REQUEST, "MISSING_CLIENT_ADDR",),
             JmespathError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "JMESPATH_ERROR",),
             MissingHostField => (StatusCode::BAD_REQUEST, "MISSING_HOST_FIELD",),
+            NoFilterMatch => (StatusCode::BAD_REQUEST, "MISSING_FILTER_DATA",),
             ZabbixBadReply => (StatusCode::INTERNAL_SERVER_ERROR, "ZABBIX_REPLY_INVALID",),
             ZabbixItemsFailed(_) => (StatusCode::BAD_REQUEST, "ZABBIX_ITEMS_FAILED",),
             ZabbixError(_) => (StatusCode::BAD_GATEWAY, "ZABBIX_ERROR",),
@@ -345,6 +368,8 @@ enum RequestError {
     JmespathError(#[from] jmespath::JmespathError),
     #[error("the request parameters do not contain the host field")]
     MissingHostField,
+    #[error("the supplied filter did not return any data from the request")]
+    NoFilterMatch,
     #[error("Zabbix returned a non-number where the failed count should have been")]
     ZabbixBadReply,
     #[error("Zabbix failed {0} items in the request")]
