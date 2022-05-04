@@ -179,14 +179,16 @@ async fn resolve_item_host(
 ) -> Result<String, Rejection> {
     // Is --zabbix-item-host-field specified?
     if let Some(pat) = &ctx.args.zabbix_item_host_field {
-        if let Some(h) = resolve_dynamic_host(pat, json).await? {
+        match resolve_dynamic_host(pat, json).await? {
             // Can the requested field be found in the GET params or POST body?
-            return Ok(h);
-        } else if ctx.args.host_field_required {
+            Some(h) =>
+                return Ok(h),
             // Otherwise, abort with an error if --host-field-required is set
-            return Err(RequestError::MissingHostField.into());
-        } else {
+            None if ctx.args.host_field_required =>
+                return Err(RequestError::MissingHostField.into()),
             // If --host-field-required not set, then continue below
+            None =>
+                info!("Specified host field `{}` is not present", pat),
         }
     }
 
@@ -227,10 +229,6 @@ async fn resolve_dynamic_host(
     let field = pattern.search(json)?;
 
     // Ensure result of JMESPath query is a non-empty string
-    if field.is_null() {
-        info!("Specified host field `{}` is not present", pattern);
-    }
-
     let field = match field.as_string() {
         Some(s) if s.is_empty() => {
             warn!("Specified host field `{}` is present but is an empty string", pattern);
@@ -238,7 +236,10 @@ async fn resolve_dynamic_host(
         },
         Some(s) => Some(s.to_owned()),
         None => {
-            warn!("Specified host field `{}` is present but is not a string (found type {})", pattern, field.get_type());
+            // Warn on wrong field type, but quietly pass along None for null
+            if !field.is_null() {
+                warn!("Specified host field `{}` is present but is not a string (found type {})", pattern, field.get_type());
+            }
             None
         }
     };
