@@ -1,7 +1,6 @@
 mod logging;
 
 use clap::Parser;
-use dns_lookup::lookup_addr;
 use log::{debug, info, LevelFilter, warn};
 use serde_json::{json, Value as JsonValue};
 use warp::Rejection;
@@ -15,6 +14,7 @@ use warp::{
     http::StatusCode,
 };
 use thiserror::Error;
+use trust_dns_resolver::{error::ResolveError, TokioAsyncResolver};
 
 use std::path::PathBuf;
 
@@ -81,7 +81,7 @@ fn validate_listen_path(path_arg: &str) -> Result<(), String> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), fern::InitError> {
+async fn main() -> Result<(), AppError> {
     let args = Cli::parse();
 
     logging::setup(
@@ -130,6 +130,7 @@ async fn main() -> Result<(), fern::InitError> {
     let listen = args.listen;
     let context = AppContext {
         zabbix: Arc::clone(&zabbix),
+        resolver: TokioAsyncResolver::tokio_from_system_conf()?,
         args,
     };
 
@@ -195,7 +196,23 @@ async fn resolve_item_host(
     } else if let Some(addr) = addr_option {
         // Otherwise, try to resolve the client's address to
         // a DNS name and fall back to just using the IP
-        Ok(resolve_remote_host(addr).await)
+        let addr = addr.ip();
+        let lookup_result = ctx.resolver.reverse_lookup(addr).await;
+        let host_ptr = lookup_result
+            // Convert Ok into Some(PTR result), Err into None
+            .iter()
+            // Create an iterator over reverse_lookup results,
+            // and flatten with above Iter over Result
+            .flat_map(|r| r.iter())
+            // Convert result to string, and trim trailing '.'
+            .map(|v| v.to_string().trim_end_matches('.').to_owned())
+            // Get the first result (should be only one for PTR records)
+            .next();
+
+        // Use Some(PTR result) or fall back to the IP address as String
+        let host = host_ptr.unwrap_or_else(|| addr.to_string());
+
+        Ok(host)
     } else {
         // Unlikely, but if all ways of determining the item
         // host are unavailable, abort with an error
@@ -209,19 +226,23 @@ async fn resolve_dynamic_host(
 ) -> Result<Option<String>, RequestError> {
     let field = pattern.search(json)?;
 
-    // Ensure result of JMESPath query is a string
-    let field = field.as_string().map(|s| s.to_owned());
+    // Ensure result of JMESPath query is a non-empty string
+    if field.is_null() {
+        info!("Specified host field `{}` is not present", pattern);
+    }
+
+    let field = match field.as_string() {
+        Some(s) if s.is_empty() => {
+            warn!("Specified host field `{}` is present but is an empty string", pattern);
+            None
+        },
+        Some(s) => Some(s.to_owned()),
+        None => {
+            warn!("Specified host field `{}` is present but is not a string (found type {})", pattern, field.get_type());
+            None
+        }
+    };
     Ok(field)
-}
-
-async fn resolve_remote_host(
-    remote_addr: &SocketAddr,
-) -> String {
-    let remote_addr = remote_addr.ip();
-
-    // Try to look up the PTR record for this IP.
-    // Failing that, return the IP address as a string.
-    lookup_addr(&remote_addr).unwrap_or(format!("{}", &remote_addr))
 }
 
 async fn send_to_zabbix(ctx: &AppContext, host: &str, data: &str) -> Result<impl Reply, Rejection> {
@@ -280,6 +301,7 @@ async fn handle_errors(err: Rejection) -> Result<impl Reply, Infallible> {
 #[derive(Clone)]
 struct AppContext {
     zabbix: Arc<ZabbixLogger>,
+    resolver: TokioAsyncResolver,
     args: Cli,
 }
 
@@ -304,6 +326,14 @@ impl ZabbixLogger {
         debug!("sending value to Zabbix {{{}:{}}}: `{}`", host, key, value);
         self.sender.send((host, key, value))
     }
+}
+
+#[derive(Error, Debug)]
+enum AppError {
+    #[error(transparent)]
+    LoggingInit(#[from] fern::InitError),
+    #[error(transparent)]
+    ResolverInit(#[from] ResolveError),
 }
 
 #[derive(Error, Debug)]
