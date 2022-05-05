@@ -56,7 +56,8 @@ struct Cli {
     host_field_required: bool,
 
     #[clap(long = "key", short = 'k', display_order(3))]
-    /// Zabbix Item key
+    /// Zabbix Item key. The special value '*' means expand all top
+    /// level keys in the request data to individual Zabbix item keys.
     zabbix_item_key: String,
 
     #[clap(long = "filter", short = 'F', parse(try_from_str = jmespath::compile))]
@@ -110,7 +111,7 @@ async fn main() -> Result<(), AppError> {
     // The Zabbix connector must live inside Arc
     // because each warp request thread concurrently
     // borrows it
-    let zabbix: Arc<ZabbixLogger> =
+    let zabbix =
         Arc::new(ZabbixLogger::new(&args.zabbix_server, args.zabbix_port));
 
     info!("Listening to requests on path `{}`", &args.listen_path);
@@ -185,12 +186,13 @@ async fn handle_request(
                 error!("the configured filter [{}] doesn't match any data in the request", f);
                 return Err(RequestError::NoFilterMatch.into());
             }
-            jmespath_result.to_string()
+            json!(jmespath_result)
         },
-        None => json.to_string(),
+        None => json,
     };
 
-    send_to_zabbix(&ctx, &remote_host, payload).await
+    send_to_zabbix(&ctx, &remote_host, payload).await?;
+    Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT))
 }
 
 async fn resolve_item_host(
@@ -267,27 +269,50 @@ async fn resolve_dynamic_host(
     Ok(field)
 }
 
-async fn send_to_zabbix(ctx: &AppContext, host: &str, data: impl AsRef<str>) -> Result<impl Reply, Rejection> {
-    let data = data.as_ref();
-    let success_reply = warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT);
+async fn send_to_zabbix(ctx: &AppContext, host: &str, data: JsonValue) -> Result<(), RequestError> {
+    let values = if ctx.args.zabbix_item_key == "*" {
+        match data.as_object() {
+            Some(d) => {
+                d.into_iter()
+                    .map(|v| (v.0.to_string(), stringify_zabbix_value(v.1),))
+                    .collect()
+            },
+            None => todo!(),
+        }
+    } else {
+        vec![(ctx.args.zabbix_item_key.clone(), data.to_string(),)]
+    };
 
     // If running in test mode, log what would be sent to zabbix to the console,
     // and return as if successful.
     if ctx.args.test_mode {
-        warn!("would send value to Zabbix {{{}:{}}}: `{}`", host, &ctx.args.zabbix_item_key, data);
-        return Ok(success_reply);
+        warn!("would send values to Zabbix: (Host = {}) {:?}", host, values);
+        return Ok(())
     }
 
-    let zbx_result = ctx.zabbix.log(host, &ctx.args.zabbix_item_key, data);
-    match zbx_result {
+    match ctx.zabbix.log_many(host, values) {
         Ok(res) => {
             match res.failed_cnt() {
-                None => Err(RequestError::ZabbixBadReply.into()),
-                Some(n) if n > 0 => Err(RequestError::ZabbixItemsFailed(n).into()),
-                _ => Ok(success_reply),
+                None => Err(RequestError::ZabbixBadReply),
+                Some(n) if n > 0 => Err(RequestError::ZabbixItemsFailed(n)),
+                _ => Ok(()),
             }
         }
-        Err(err) => Err(RequestError::ZabbixError(err.to_string()).into()),
+        Err(err) => {
+            error!("Zabbix error: {}", err);
+            Err(RequestError::ZabbixError(err.to_string()))
+        },
+    }
+}
+
+fn stringify_zabbix_value(value: &JsonValue) -> String {
+    if let Some(s) = value.as_str() {
+        s.to_string()
+    } else if let Some(b) = value.as_bool() {
+        let bool_as_int_str = if b { "1" } else { "0" };
+        bool_as_int_str.to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -346,10 +371,23 @@ impl ZabbixLogger {
         }
     }
 
-    fn log(&self, host: &str, key: &str, value: &str) -> zbx_sender::Result<zbx_sender::Response> {
-        debug!("sending value to Zabbix {{{}:{}}}: `{}`", host, key, value);
-        self.sender.send((host, key, value))
+    fn log_many(&self,
+        host: &str,
+        values: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>
+    )
+        -> zbx_sender::Result<zbx_sender::Response>
+    {
+        let values: Vec<zbx_sender::SendValue> = values.into_iter()
+            .map(|i| (host, i.0.as_ref(), i.1.as_ref(),).into())
+            .collect();
+
+        debug!("sending to Zabbix `{:?}`", values);
+        self.sender.send(values)
     }
+
+    // fn log(&self, host: &str, key: &str, value: &str) -> zbx_sender::Result<zbx_sender::Response> {
+    //     self.log_many(host, [(key, value,)])
+    // }
 }
 
 #[derive(Error, Debug)]
