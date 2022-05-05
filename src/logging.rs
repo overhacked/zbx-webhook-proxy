@@ -26,6 +26,7 @@ pub fn setup(
 }
 
 fn setup_console(level: log::LevelFilter) -> fern::Dispatch {
+    let main_module = module_path!().split("::").next().unwrap();
     let limit_to_info = || match level {
         LevelFilter::Debug | LevelFilter::Trace => LevelFilter::Info,
         _ => level,
@@ -37,7 +38,7 @@ fn setup_console(level: log::LevelFilter) -> fern::Dispatch {
         .level(limit_to_info())
         // Allow this module and zbx_sender to
         // log at Trace and Debug
-        .level_for(module_path!(), level)
+        .level_for(main_module, level)
         .level_for("zbx_sender", level)
         .format(|out, message, record| {
             out.finish(format_args!(
