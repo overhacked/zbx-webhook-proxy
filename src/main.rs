@@ -18,6 +18,8 @@ use trust_dns_resolver::{error::ResolveError, TokioAsyncResolver};
 
 use crate::config::Config;
 
+type ZabbixItemValue = (String, String,);
+
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let config = Config::load()?;
@@ -62,6 +64,7 @@ async fn main() -> Result<(), AppError> {
     let context = AppContext {
         zabbix: Arc::clone(&zabbix),
         resolver: resolver.clone(),
+        test_mode: config.test_mode,
     };
     let routes = route_filter.unwrap()
         .and(with_context(context))
@@ -97,7 +100,7 @@ async fn handle_request(
     addr_option: Option<SocketAddr>,
     json: JsonValue,
 ) -> Result<impl Reply, Rejection> {
-    let remote_host = resolve_item_host(&route, &ctx, &addr_option, &json).await?;
+    let remote_host = resolve_item_host(&route, &ctx.resolver, &addr_option, &json).await?;
 
     let payload = match &route.json_filter {
         Some(f) => {
@@ -111,13 +114,21 @@ async fn handle_request(
         None => json,
     };
 
-    send_to_zabbix(&route, &ctx, &remote_host, payload).await?;
+    let item_values = compose_zabbix_kv_tuples(&route.item_key, &payload)?;
+    // If running in test mode, log what would be sent to zabbix to the console,
+    // and return as if successful.
+    if ctx.test_mode {
+        warn!("would send values to Zabbix: (Host = {}) {:?}", remote_host, item_values);
+    } else {
+        send_to_zabbix(ctx.zabbix, &remote_host, item_values).await?;
+    }
+
     Ok(warp::reply::with_status(String::from(""), StatusCode::NO_CONTENT))
 }
 
 async fn resolve_item_host(
     route: &Route,
-    ctx: &AppContext,
+    resolver: &TokioAsyncResolver,
     addr_option: &Option<SocketAddr>,
     json: &JsonValue,
 ) -> Result<String, Rejection> {
@@ -143,7 +154,7 @@ async fn resolve_item_host(
         // Otherwise, try to resolve the client's address to
         // a DNS name and fall back to just using the IP
         let addr = addr.ip();
-        let lookup_result = ctx.resolver.reverse_lookup(addr).await;
+        let lookup_result = resolver.reverse_lookup(addr).await;
         let host_ptr = lookup_result
             // Convert Ok into Some(PTR result), Err into None
             .iter()
@@ -190,26 +201,21 @@ async fn resolve_dynamic_host(
     Ok(field)
 }
 
-async fn send_to_zabbix(route: &Route, ctx: &AppContext, host: &str, data: JsonValue) -> Result<(), RequestError> {
-    let values = if route.item_key == "*" {
+fn compose_zabbix_kv_tuples(key: &str, data: &JsonValue) -> Result<Vec<ZabbixItemValue>, RequestError> {
+    let values = if key == "*" {
         data.as_object()
             .ok_or(RequestError::WildcardKeyOnNonObject)?
             .into_iter()
             .map(|v| (v.0.to_string(), stringify_zabbix_value(v.1),))
             .collect()
     } else {
-        vec![(route.item_key.clone(), data.to_string(),)]
+        vec![(key.to_owned(), data.to_string(),)]
     };
+    Ok(values)
+}
 
-    // If running in test mode, log what would be sent to zabbix to the console,
-    // and return as if successful.
-    // TODO: reimplement test_mode
-    // if ctx.route.test_mode {
-    //     warn!("would send values to Zabbix: (Host = {}) {:?}", host, values);
-    //     return Ok(())
-    // }
-
-    match ctx.zabbix.log_many(host, values) {
+async fn send_to_zabbix(zabbix: Arc<ZabbixLogger>, host: &str, values: Vec<ZabbixItemValue>) -> Result<(), RequestError> {
+    match zabbix.log_many(host, values) {
         Ok(res) => {
             match res.failed_cnt() {
                 None => Err(RequestError::ZabbixBadReply),
@@ -271,6 +277,7 @@ async fn handle_errors(err: Rejection) -> Result<impl Reply, Infallible> {
 struct AppContext {
     zabbix: Arc<ZabbixLogger>,
     resolver: TokioAsyncResolver,
+    test_mode: bool,
 }
 
 struct ZabbixLogger {
