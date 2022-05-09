@@ -30,12 +30,16 @@ async fn main() -> Result<(), AppError> {
         info!("Logging HTTP requests to {}", path.display());
     }
 
-    // The Zabbix connector must live inside Arc
-    // because each warp request thread concurrently
-    // borrows it
-    let zabbix =
-        Arc::new(ZabbixLogger::new(config.zabbix_server.expect("Config invariant"), config.zabbix_port));
-    let resolver = AsyncResolver::tokio_from_system_conf()?;
+    // The Zabbix connector must live inside Arc because it is not Clone
+    let zabbix = Arc::new(
+        ZabbixLogger::new(config.zabbix_server.expect("Config invariant"), config.zabbix_port)
+    );
+    // The AsyncResolver IS Clone but should live inside Arc to allow
+    // efficient resolver caching, otherwise every resolver.clone()
+    // copies the entire cache
+    let resolver = Arc::new(
+        AsyncResolver::tokio_from_system_conf()?
+    );
 
     let mut route_filters = None;
     for route in config.routes {
@@ -55,7 +59,7 @@ async fn main() -> Result<(), AppError> {
 
     let context = handlers::AppContext {
         zabbix: Arc::clone(&zabbix),
-        resolver: resolver.clone(),
+        resolver: Arc::clone(&resolver),
         test_mode: config.test_mode,
     };
     let routes = route_filters.expect("Config invariant")

@@ -9,7 +9,7 @@ use crate::{AsyncResolver, config::Route, json, JsonValue, zabbix::ZabbixLogger,
 #[derive(Clone)]
 pub struct AppContext {
     pub zabbix: Arc<ZabbixLogger>,
-    pub resolver: AsyncResolver,
+    pub resolver: Arc<AsyncResolver>,
     pub test_mode: bool,
 }
 
