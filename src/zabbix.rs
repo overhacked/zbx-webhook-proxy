@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use log::{info, debug};
 
 pub struct ZabbixLogger {
@@ -19,12 +21,15 @@ impl ZabbixLogger {
 
     pub fn log_many(&self,
         host: &str,
-        values: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>
+        values: impl IntoIterator<Item = impl Borrow<ZabbixItemValue>>
     )
         -> zbx_sender::Result<zbx_sender::Response>
     {
         let values: Vec<zbx_sender::SendValue> = values.into_iter()
-            .map(|i| (host, i.0.as_ref(), i.1.as_ref(),).into())
+            .map(|i| {
+                let i = i.borrow();
+                (host, i.key.as_str(), i.value.as_str(),).into()
+            })
             .collect();
 
         debug!("sending to Zabbix `{:?}`", values);
@@ -34,5 +39,22 @@ impl ZabbixLogger {
     // fn log(&self, host: &str, key: &str, value: &str) -> zbx_sender::Result<zbx_sender::Response> {
     //     self.log_many(host, [(key, value,)])
     // }
+}
+
+#[derive(Debug)]
+pub struct ZabbixItemValue {
+    pub key: String,
+    pub value: String,
+}
+
+impl<S> From<(S, S,)> for ZabbixItemValue
+    where S: Into<String>
+{
+    fn from((key, value,): (S, S,)) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
 }
 

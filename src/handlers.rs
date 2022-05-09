@@ -125,10 +125,16 @@ fn compose_zabbix_kv_tuples(key: &str, data: &JsonValue) -> Result<Vec<ZabbixIte
         data.as_object()
             .ok_or(RequestError::WildcardKeyOnNonObject)?
             .into_iter()
-            .map(|v| (v.0.to_string(), stringify_zabbix_value(v.1),))
+            .map(|v| ZabbixItemValue {
+                key: v.0.to_string(),
+                value: stringify_zabbix_value(v.1),
+            })
             .collect()
     } else {
-        vec![(key.to_owned(), data.to_string(),)]
+        vec![ZabbixItemValue {
+            key: key.to_owned(),
+            value: data.to_string(),
+        }]
     };
     Ok(values)
 }

@@ -15,8 +15,7 @@ use trust_dns_resolver::{error::ResolveError, TokioAsyncResolver as AsyncResolve
 
 use crate::config::Config;
 use crate::zabbix::ZabbixLogger;
-
-type ZabbixItemValue = (String, String,);
+pub use crate::zabbix::ZabbixItemValue;
 
 #[tokio::main]
 async fn main() -> Result<()> {
