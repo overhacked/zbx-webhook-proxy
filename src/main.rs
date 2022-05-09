@@ -4,6 +4,7 @@ mod filters;
 mod logging;
 mod zabbix;
 
+use simple_eyre::eyre::Result;
 use log::{info, error};
 pub(crate) use serde_json::{json, Value as JsonValue};
 use std::io;
@@ -18,7 +19,8 @@ use crate::zabbix::ZabbixLogger;
 type ZabbixItemValue = (String, String,);
 
 #[tokio::main]
-async fn main() -> Result<(), AppError> {
+async fn main() -> Result<()> {
+    simple_eyre::install()?;
     let config = Config::load()?;
 
     logging::setup(
@@ -80,10 +82,16 @@ enum AppError {
     LoggingInit(#[from] fern::InitError),
     #[error(transparent)]
     ResolverInit(#[from] ResolveError),
-    #[error(transparent)]
-    IoError(#[from] io::Error),
+    #[error("Failed to load configuration file at `{path}`")]
+    ConfigLoadError {
+        path: String,
+        source: io::Error
+    },
     #[error(transparent)]
     ConfigSyntaxError(#[from] toml::de::Error),
-    #[error("required setting `{0}` not present in configuration file")]
+    #[error(
+        "Required setting `{0}` not present \
+        in configuration file or on command line"
+    )]
     ConfigMissingRequired(String),
 }

@@ -90,7 +90,11 @@ impl Config {
 
     pub(crate) fn load() -> Result<Self, AppError> {
         let args = Cli::parse();
-        let toml_file = fs::read_to_string(&args.config_file)?;
+        let toml_file = fs::read_to_string(&args.config_file)
+            .map_err(|e| AppError::ConfigLoadError {
+                path: args.config_file.to_string_lossy().into_owned(),
+                source: e
+            })?;
         let mut config: Self = toml::from_str(&toml_file)?;
         config.listen = args.listen.unwrap_or(config.listen);
         config.zabbix_server = args.zabbix_server.or(config.zabbix_server)
