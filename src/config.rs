@@ -9,10 +9,12 @@ use crate::AppError;
 
 type JmesPathExpression = jmespath::Expression<'static>;
 
+const DEFAULT_CONFIG_PATH: &str = "/etc/getparams_to_zabbix.toml";
+
 #[derive(Parser, Clone, Debug)]
 #[clap(about, author)]
 struct Cli {
-    #[clap(long = "config", short = 'c', parse(from_os_str), default_value = "/etc/getparams_to_zabbix.toml")]
+    #[clap(long = "config", short = 'c', parse(from_os_str), default_value = DEFAULT_CONFIG_PATH)]
     config_file: PathBuf,
 
     #[clap(long = "listen", short = 'l')]
