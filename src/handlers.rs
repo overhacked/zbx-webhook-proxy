@@ -140,7 +140,9 @@ fn compose_zabbix_kv_tuples(key: &str, data: &JsonValue) -> Result<Vec<ZabbixIte
 }
 
 async fn send_to_zabbix(zabbix: Arc<ZabbixLogger>, host: &str, values: Vec<ZabbixItemValue>) -> Result<(), RequestError> {
-    match zabbix.log_many(host, values) {
+    let host = host.to_owned();
+    let result = tokio::task::spawn_blocking(move || zabbix.log_many(&host, values)).await?;
+    match result {
         Ok(res) => {
             match res.failed_cnt() {
                 None => Err(RequestError::ZabbixBadReply),
@@ -180,6 +182,7 @@ pub async fn handle_errors(err: Rejection) -> Result<impl Reply, Infallible> {
             JmespathError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "JMESPATH_ERROR",),
             MissingHostField => (StatusCode::BAD_REQUEST, "MISSING_HOST_FIELD",),
             NoFilterMatch => (StatusCode::BAD_REQUEST, "MISSING_FILTER_DATA",),
+            JoinError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "ZABBIX_TASK_FAILED",),
             ZabbixBadReply => (StatusCode::INTERNAL_SERVER_ERROR, "ZABBIX_REPLY_INVALID",),
             ZabbixItemsFailed(_) => (StatusCode::BAD_REQUEST, "ZABBIX_ITEMS_FAILED",),
             ZabbixError(_) => (StatusCode::BAD_GATEWAY, "ZABBIX_ERROR",),
@@ -210,6 +213,8 @@ enum RequestError {
     NoFilterMatch,
     #[error("the item key was specified as a wildcard ('*') but the supplied item value was not a JSON object")]
     WildcardKeyOnNonObject,
+    #[error("Zabbix trapper task failed: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
     #[error("Zabbix returned a non-number where the failed count should have been")]
     ZabbixBadReply,
     #[error("Zabbix failed {0} items in the request")]
