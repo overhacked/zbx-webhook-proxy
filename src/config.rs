@@ -9,16 +9,19 @@ use crate::AppError;
 
 type JmesPathExpression = jmespath::Expression<'static>;
 
-const DEFAULT_CONFIG_PATH: &str = "/etc/getparams_to_zabbix.toml";
+const DEFAULT_CONFIG_PATH: &str = concat!("/etc/", env!("CARGO_PKG_NAME"), ".toml");
 
 #[derive(Parser, Clone, Debug)]
 #[clap(about, author)]
 struct Cli {
+    /// Path to TOML-format configuration file
     #[clap(long = "config", short = 'c', parse(from_os_str), default_value = DEFAULT_CONFIG_PATH)]
     config_file: PathBuf,
 
     #[clap(long = "listen", short = 'l')]
     /// HTTP server listening address and port
+    ///
+    /// [default: 3030]
     listen: Option<SocketAddr>,
 
     #[clap(long = "zabbix-server", short = 'z', display_order(1))]
@@ -27,6 +30,8 @@ struct Cli {
 
     #[clap(long = "zabbix-port", short = 'p', display_order(2))]
     /// Zabbix Server trapper port
+    ///
+    /// [default: 10051]
     zabbix_port: Option<u16>,
 
     #[clap(long = "access-log", parse(from_os_str))]
