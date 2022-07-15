@@ -1,0 +1,135 @@
+# Zabbix Server address
+# Required; no default value
+zabbix_server = "zabbix.example.com"
+
+# Zabbix Server trapper port
+# Default: 10051
+# zabbix_port = 10051
+
+# The address on which webhook HTTP requests are accepted
+# Default: [IPv6 localhost]:3030
+# listen = "[::1]:3030"
+
+# Path to the access log file. Requests are logged in Apache Common log format
+# Default: logging disabled
+# access_log_path = ""
+
+# Console log level (for troubleshooting)
+# Default: warn
+# Possible values: trace, debug, info, warn, error, off
+# log_level = "warn"
+
+################################################################
+# Routes (paths) at which to accept webhook requests           #
+# (TOML requires double-brackets around the "route" identifier #
+# to indicate that you are appending to the list of routes)    #
+################################################################
+
+###
+# Comprehensive example with defaults shown
+###
+[[route]]
+
+# Path on which this host & item combination will accept requests
+# 
+# Required; no default
+path = "/hook"
+
+# Key of the Zabbix Item this webhook sends values to
+#
+# Required; no default
+item_key = "event.json"
+
+# Zabbix Host that owns the specified Item
+# 
+# Default: Hostname of the HTTP client sending the webhook request, resolved via reverse DNS
+# Note: it is usually best to specify `item_host` or `item_host_field`
+item_host = "Monitored Host Name"
+
+# A JMESPath expression to set the Zabbix Host from the request data
+# POST requests must have a JSON request body
+# GET request parameters are converted to a simple JSON object, e.g.:
+# {"param1": "value1", "param2", "value2", ...}
+#
+# Default: none, see `item_host`
+item_host_field = "_meta.host"
+
+# How to handle a missing `item_host_field` in the request
+#
+# true  = respond to the webhook request with a 400 Bad Request error
+# false = fall back to `item_host` or reverse DNS
+#
+# Default: false
+item_host_field_required = false
+
+# A JMESPath expression applied to the request data
+# See `item_host_field` description for details
+#
+# Default: "@" (pass through top level JSON value)
+json_filter = "@"
+
+##########################
+# Further route examples #
+##########################
+
+###
+# Route that gets Zabbix Host dynamically from request
+# 
+# Example request body:
+# {
+#   "_meta": {
+#     "source": "frontend01",
+#     "status": "success"
+#   },
+#   "count": 2468,
+#   "retries": 11
+# }
+###
+[[route]]
+path = "/frontend/count"
+item_host_field = "@._meta.source"
+item_host_field_required = true
+item_key = "metrics.json"
+
+###
+# Route that selects and renames certain keys from JSON body
+# (see json_filter syntax at https://jmespath.org/)
+#
+# Example request body:
+# {
+#   "alpha": 0,
+#   "bravo": 1,
+#   "charlie": 2,
+#   "delta": 3,
+#   "echo": 4
+# }
+#
+# JSON sent to Zabbix:
+# {
+#   "B": 1,
+#   "D": 3
+# }
+###
+[[route]]
+path = "/alpha"
+item_host = "Alphabet City"
+item_key = "json"
+json_filter = "{B: bravo, D: delta}"
+
+###
+# Route that sends GET parameters to Zabbix as JSON
+# (optionally could be filtered with `json_filter`)
+#
+# Example request:
+# http://[WEBHOOK_PROXY_ADDRESS]/get_hook?cat_status=hungry&last_fed=19000101
+#
+# JSON sent to Zabbix:
+# {
+#   "cat_status": "hungry",
+#   "last_fed": "19000101"
+# }
+###
+[[route]]
+path = "/get_hook"
+item_host = "Food Bowl"
+item_key = "status.json"
