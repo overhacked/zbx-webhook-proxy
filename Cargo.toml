@@ -1,11 +1,15 @@
 [package]
-name = "getparams-to-zabbix"
-version = "0.1.0"
-description = "Accept HTTP GET params and send values to Zabbix Server as JSON"
+name = "zbx-webhook-proxy"
+homepage = "https://github.com/overhacked/zbx-webhook-proxy/"
+repository = "https://github.com/overhacked/zbx-webhook-proxy/"
+readme = "README.md"
+version = "0.2.0"
+description = "Accept HTTP GET params or POSTed JSON and send values to Zabbix Server as JSON"
+keywords = ["Zabbix","webhook","proxy","json","http"]
+categories = ["web-programming","config","command-line-utilities"]
 authors = ["Ross Williams <ross@ross-williams.net>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "BSD-3-Clause"
+edition = "2021"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
