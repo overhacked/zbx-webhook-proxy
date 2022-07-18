@@ -5,11 +5,14 @@ use warp::{filters::BoxedFilter, Filter, Rejection};
 use crate::handlers::AppContext;
 
 pub fn make_path_filter(path: impl AsRef<str>) -> BoxedFilter<()> {
-    let path = path.as_ref().trim_start_matches('/').to_string();
+    let path = path.as_ref().trim_start_matches('/');
     if path.is_empty() {
         warp::path::end().boxed()
     } else {
-        warp::path(path).and(warp::path::end()).boxed()
+        let mut segments = path.split('/').map(|s| warp::path(s.to_owned()));
+        let first_segment = segments.next().expect("path contains '/'");
+        let filter = segments.fold(first_segment.boxed(), |f, s| f.and(s).boxed());
+        filter.and(warp::path::end()).boxed()
     }
 }
 
