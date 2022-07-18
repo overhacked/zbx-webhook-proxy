@@ -77,6 +77,8 @@ impl Cli {
     #[serde(deserialize_with = "Config::parse_log_level", default = "Config::default_log_level")]
     pub log_level: LevelFilter,
 
+    // Rename to singular to improve config file legibility
+    #[serde(rename = "route")]
     pub routes: Vec<Route>,
 
     #[serde(skip, default)]
