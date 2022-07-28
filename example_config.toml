@@ -36,6 +36,8 @@ zabbix_server = "zabbix.example.com"
 path = "/hook"
 
 # Key of the Zabbix Item this webhook sends values to
+# A special value of `*` will expand all the top-level keys
+# of a JSON object/hash into separate Zabbix Item key/value pairs.
 #
 # Required; no default
 item_key = "event.json"
@@ -133,3 +135,29 @@ json_filter = "{B: bravo, D: delta}"
 path = "/get_hook"
 item_host = "Food Bowl"
 item_key = "status.json"
+
+###
+# Route that expands all top-level JSON keys to separate
+# Zabbix items
+#
+# Example request body:
+# {
+#   "item.one": {"data": "first"},
+#   "item.two": {"data": "second"}
+# }
+#
+# JSON sent to Zabbix:
+# {
+#   "data": "first"
+# }
+# (^^^ as item with key `item.one`)
+#
+# {
+#   "data": "second"
+# }
+# (^^^ as item with key `item.two`)
+###
+[[route]]
+path = "/expand_keys"
+item_host = "Test Host"
+item_key = "*"
