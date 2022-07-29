@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] 2022-07-29
+### Changed
+- Updated to `zbx-sender-rs` 0.3.0, to address some vulnerabilities in
+  transitive dependencies of that crate
+- Switched from `logging` crate to `tracing` crate for console
+  output and HTTP access logging. HTTP access log format remains
+  the same; only the internal implementation has changed
+- Console debugging output is richer and can be in color, showing
+  message levels and module location of events
+### Added
+- Documented `"*"` value for `item_key` configuration, which expands each
+  top-level key in the JSON object of a request to a separate Item in Zabbix.
+  See [example configuration](example_config.yaml) for details.
+
 ## [0.2.0] 2022-07-18
 ### Added
 - TOML configuration format
