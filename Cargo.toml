@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 # Using feature preserve_order so that JSON bodies are passed
 # through to Zabbix in the same key order as they were POSTed
 serde_json = { version = "1.0.41", features = ["preserve_order"] }
-zbx_sender = "0.2.0"
+zbx_sender = "0.3.0"
 warp = { version = "0.3", default-features = false }
 pretty_env_logger = "0.3.1"
 log = "0.4.8"
