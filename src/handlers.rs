@@ -1,10 +1,10 @@
 use std::{sync::Arc, net::SocketAddr, convert::Infallible};
 
 use thiserror::Error;
-use log::{info, warn, error};
+use tracing::{info, warn, error};
 use warp::{http::StatusCode, Rejection, Reply};
 
-use crate::{AsyncResolver, config::Route, json, JsonValue, zabbix::ZabbixLogger, ZabbixItemValue};
+use crate::{AsyncResolver, config::Route, json, JsonValue, zabbix::{ZabbixLogger, TestZabbixValue, TestZabbixMessage}, ZabbixItemValue};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -37,7 +37,15 @@ pub async fn handle_request(
     // If running in test mode, log what would be sent to zabbix to the console,
     // and return as if successful.
     if ctx.test_mode {
-        warn!("would send values to Zabbix: (Host = {}) {:?}", remote_host, item_values);
+        let test_values = item_values.iter().map(|i|
+            TestZabbixValue {
+                host: remote_host.clone(),
+                value: i,
+            }
+        ).collect();
+        let test_message = TestZabbixMessage(test_values);
+
+        info!(target: "test_mode", "would send values to Zabbix: {}", test_message);
     } else {
         send_to_zabbix(ctx.zabbix, &remote_host, item_values).await?;
     }

@@ -1,7 +1,7 @@
 use std::{net::{SocketAddr, Ipv6Addr}, path::PathBuf, str::FromStr, fs};
 
 use clap::Parser;
-use log::LevelFilter;
+use tracing_subscriber::filter::LevelFilter;
 use serde::{Deserialize, Deserializer, de};
 use warp::http::uri::PathAndQuery;
 
@@ -50,10 +50,10 @@ struct Cli {
 impl Cli {
     fn parse_verbosity(count: u64) -> LevelFilter {
         match count {
-            0 => LevelFilter::Off,
-            1 => LevelFilter::Info,
-            2 => LevelFilter::Debug,
-            _ => LevelFilter::Trace,
+            0 => LevelFilter::OFF,
+            1 => LevelFilter::INFO,
+            2 => LevelFilter::DEBUG,
+            _ => LevelFilter::TRACE,
         }
     }
 }
@@ -88,7 +88,7 @@ impl Cli {
 impl Config {
     fn default_listen() -> SocketAddr { (Ipv6Addr::LOCALHOST, 3030).into() }
     fn default_zabbix_port() -> u16 { 10051 }
-    fn default_log_level() -> LevelFilter { LevelFilter::Warn }
+    fn default_log_level() -> LevelFilter { LevelFilter::WARN }
     fn parse_log_level<'de, D>(deserializer: D) -> Result<LevelFilter, D::Error>
         where D: Deserializer<'de>
     {

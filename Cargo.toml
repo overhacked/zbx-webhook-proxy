@@ -19,9 +19,6 @@ serde_json = { version = "1.0.41", features = ["preserve_order"] }
 zbx_sender = "0.3.0"
 warp = { version = "0.3", default-features = false }
 pretty_env_logger = "0.3.1"
-log = "0.4.8"
-fern = "0.5.8"
-chrono = "0.4.9"
 clap = { version = "3.1.12", features = ["derive"] }
 thiserror = "1.0.30"
 tokio = { version = "1.18.0", features = ["rt-multi-thread", "macros"] }
@@ -29,3 +26,7 @@ jmespath = { version = "0.3.0", features = ["sync"] }
 trust-dns-resolver = "0.21.2"
 toml = "0.5.9"
 simple-eyre = "0.3.1"
+tracing = "0.1.35"
+tracing-subscriber = { version = "0.3.15", features = ["local-time"] }
+time = { version = "0.3.11", features = ["macros"] }
+tracing-appender = "0.2.2"

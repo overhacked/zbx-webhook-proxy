@@ -1,6 +1,7 @@
-use std::borrow::Borrow;
+use std::{borrow::Borrow, fmt::Display};
 
-use log::{info, debug};
+use serde::Serialize;
+use tracing::{info, debug};
 
 pub struct ZabbixLogger {
     sender: zbx_sender::Sender,
@@ -41,7 +42,7 @@ impl ZabbixLogger {
     // }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ZabbixItemValue {
     pub key: String,
     pub value: String,
@@ -58,3 +59,19 @@ impl<S> From<(S, S,)> for ZabbixItemValue
     }
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct TestZabbixValue<'a> {
+    pub host: String,
+    #[serde(flatten)]
+    pub value: &'a ZabbixItemValue,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TestZabbixMessage<'a>(pub Vec<TestZabbixValue<'a>>);
+
+impl<'a> Display for TestZabbixMessage<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let json = serde_json::to_string_pretty(self).expect("serialization failed");
+        writeln!(f, "{}", json)
+    }
+}

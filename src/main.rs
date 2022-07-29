@@ -5,7 +5,7 @@ mod logging;
 mod zabbix;
 
 use simple_eyre::eyre::Result;
-use log::{info, error};
+use tracing::{info, error};
 pub(crate) use serde_json::{json, Value as JsonValue};
 use std::io;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
     simple_eyre::install()?;
     let config = Config::load()?;
 
-    logging::setup(
+    let _log_guard = logging::setup(
         config.log_level,
         &config.access_log_path,
     )?;
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
         .and(filters::get().or(filters::post()).unify())
         .and_then(handlers::handle_request)
         .recover(handlers::handle_errors)
-        .with(warp::log::custom(logging::warp_combined));
+        .with(warp::trace(logging::warp_trace));
 
     warp::serve(routes).run(config.listen).await;
     Ok(())
@@ -78,7 +78,9 @@ async fn main() -> Result<()> {
 #[derive(Error, Debug)]
 enum AppError {
     #[error(transparent)]
-    LoggingInit(#[from] fern::InitError),
+    LoggingInit(#[from] tracing_subscriber::util::TryInitError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
     #[error(transparent)]
     ResolverInit(#[from] ResolveError),
     #[error("Failed to load configuration file at `{path}`")]
