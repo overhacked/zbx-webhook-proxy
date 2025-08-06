@@ -1740,7 +1740,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simple-eyre",
- "thiserror 1.0.31",
+ "thiserror 2.0.12",
  "time 0.3.11",
  "tokio",
  "toml",
