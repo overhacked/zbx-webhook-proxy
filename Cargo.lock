@@ -1148,7 +1148,16 @@ version = "1.0.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd829fe32373d27f76265620b5309d0340cb8550f523c1dda251d6298069069a"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.31",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+dependencies = [
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -1160,6 +1169,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.98",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]
@@ -1393,7 +1413,7 @@ dependencies = [
  "log",
  "rand",
  "smallvec",
- "thiserror",
+ "thiserror 1.0.31",
  "tinyvec",
  "tokio",
  "url",
@@ -1414,7 +1434,7 @@ dependencies = [
  "parking_lot",
  "resolv-conf",
  "smallvec",
- "thiserror",
+ "thiserror 1.0.31",
  "tokio",
  "trust-dns-proto",
 ]
@@ -1720,7 +1740,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simple-eyre",
- "thiserror",
+ "thiserror 1.0.31",
  "time 0.3.11",
  "tokio",
  "toml",
@@ -1734,14 +1754,14 @@ dependencies = [
 
 [[package]]
 name = "zbx_sender"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3787b257ace0b98155b689c2dba4555f033b6abc8c4d5afef5059d4838eb084"
+checksum = "d4834c8c50a015f0bc9bf56df5992eae376c450bc4d40899397efc34046cb83c"
 dependencies = [
  "byteorder",
  "lazy_static",
  "regex",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.12",
 ]
