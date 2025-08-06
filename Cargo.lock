@@ -591,11 +591,10 @@ checksum = "112c678d4050afce233f4f2852bb2eb519230b3cf12f33585275537d7e41578d"
 
 [[package]]
 name = "jmespath"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "017f8f53dd3b8ada762acb1f850da2a742d0ef3f921c60849a644380de1d683a"
+checksum = "6f40cd1816d6f52b8c97bfd9bfca82af01653ecbf53a5d341968cc4cfeb65c0c"
 dependencies = [
- "lazy_static",
  "serde",
  "serde_json",
  "slug",
