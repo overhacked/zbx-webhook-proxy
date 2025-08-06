@@ -23,7 +23,7 @@ clap = { version = "3.1.12", features = ["derive"] }
 thiserror = "2.0.12"
 tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }
 jmespath = { version = "0.4.0", features = ["sync"] }
-trust-dns-resolver = "0.21.2"
+trust-dns-resolver = "0.23.2"
 toml = "0.9.5"
 simple-eyre = "0.3.1"
 tracing = "0.1.35"
