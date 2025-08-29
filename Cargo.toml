@@ -27,6 +27,6 @@ trust-dns-resolver = "0.23.2"
 toml = "0.9.5"
 simple-eyre = "0.3.1"
 tracing = "0.1.35"
-tracing-subscriber = { version = "0.3.15", features = ["local-time"] }
+tracing-subscriber = { version = "0.3.20", features = ["local-time"] }
 time = { version = "0.3.11", features = ["macros"] }
 tracing-appender = "0.2.2"
